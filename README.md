@@ -55,11 +55,46 @@ All of this is in `engine.js` (no UI code), testable on its own in Node.
 
 ## Run it
 
-It's one file: `index.html`. Open it in Chrome, Edge or Safari. No server needed.
+Open `index.html` from a web server (GitHub Pages, an internal server, or `python3 -m http.server` in this folder). No backend, no database.
 
-GitHub Pages for prototype hosting: create a repo, add `index.html` and this README, Settings → Pages → Deploy from branch. **Example files only:** unreleased prints and patterns should not go through a personal GitHub account; that's what the LVMH-hosted version is for.
+**GitHub Pages (prototype only):** Settings → Pages → Deploy from branch → `main` / root. Example files only: the repository and its Pages site sit on a personal account.
 
-**Editing the source:** `app.src.html` (page), `engine.js` (DXF + geometry), `sample.js` (example pattern and print). Run `python3 build.py` to produce `index.html` (standalone) and `app.html` (claude.ai preview).
+**Editing:** change files in `src/`, then run `python3 build.py`. It regenerates `index.html` and `assets/`, and `build/claude-preview.html` for the claude.ai preview.
+
+```
+index.html              hosted page (generated)
+assets/                 app code, styles, fonts, logo (generated from src/, except fonts and logo)
+vendor/                 third-party libraries, with their licences
+src/app.src.html        page source: markup, styles, app code
+src/engine.js           DXF reading, size matching, print transforms (no UI)
+src/sample.js           example pattern and print
+build.py
+```
+
+---
+
+## Security: working with unreleased prints
+
+**Nothing leaves the computer.** Patterns and prints are opened in the browser, processed there, and exported to the computer's own downloads. There is no upload, no server and no analytics.
+
+**The page can't connect anywhere else.** The hosted version (`index.html`) loads only files from its own folder: libraries are in `vendor/`, fonts in `assets/fonts/`. A Content Security Policy in the page tells the browser to refuse every outgoing connection (`connect-src 'none'`), every outside image, script, font or frame, and inline or `eval` code. So even a later code change, or a compromised library, couldn't send artwork out without the policy being edited too.
+
+Tested: in Chrome, a deliberate attempt to send data out by fetch, beacon, WebSocket, outside image and outside script was refused every time, and normal use (open pattern, open PNG/SVG/TIFF, export ZIP) made no request outside the page's own folder.
+
+**What the policy can't cover** (for IT's review):
+- A script navigating the whole page to another address. The code has no such navigation or outside links; code review keeps it that way.
+- `frame-ancestors` can't be set from inside the page. When hosting internally, also send the same policy as an HTTP header, plus `frame-ancestors 'self'`.
+- The on-device autosave (browser storage) and exported files stay on the computer. On shared machines, IT may want autosave off or cleared.
+
+**Steps to approve it for unreleased prints**
+1. Transfer this repository to the company's code platform and make it private; changes go through IT review.
+2. Host `index.html` + `assets/` + `vendor/` internally, behind company sign-in, with the CSP also sent as an HTTP header.
+3. InfoSec review: about 1,900 lines of app code and styles, no backend; third-party code is the four libraries in `vendor/`.
+4. Sign-off from the owner of the artwork (design / PD lead).
+5. Decide autosave on shared devices; export to the approved SharePoint/Teams folder.
+6. Pilot with real DXFs and prints, then roll out.
+
+The claude.ai preview is a separate copy that loads libraries from public CDNs and sits on a personal account: example files only.
 
 ---
 
@@ -84,10 +119,10 @@ The DXF reader was built against the AAMA/ASTM structure and tested with generat
 Some CADs export only the base size plus a separate `.RUL` grade-rule file. That isn't supported yet. Options: ask the team to export all sizes (simplest), or add a RUL reader that applies the grade rules to the base outline.
 
 ### 3. Hosting and confidentiality
-Everything runs in the browser; files never leave the device. For production, host the static page internally behind SSO. No backend is needed for the current feature set.
+See **Security** above.
 
 ### 4. Libraries
-Loaded from public CDNs: **JSZip 3.10.1** (MIT, export), **clipper-lib 6.4.2** (Boost licence, bleed offset; a simpler built-in offset is used if it can't load), **UTIF 3.1.0** (MIT, only when a TIFF is opened). For production, vendor them into the repo.
+Bundled in `vendor/`, nothing loaded from outside: **JSZip 3.10.1** (MIT or GPLv3, export), **clipper-lib 6.4.2** (Boost licence, bleed offset), **UTIF 3.1.0** (MIT, TIFF reading) and **pako 1.0.11** (MIT, for ZIP-compressed TIFFs). Fonts in `assets/fonts/` are Cormorant Garamond, Hanken Grotesk and JetBrains Mono, all under the SIL Open Font License (licences alongside).
 
 ### 5. Illustrator round-trip
 SVG is the safest open format for Illustrator: layers come through as named groups, units in mm. To check on site: that the team's Illustrator version opens the files at exactly 1:1 (measure one piece) and that the clipping comes through as a clipping mask. If they prefer native files, an Illustrator script (`.jsx`) that applies the same transforms to the original `.ai` artwork is a possible phase 2: the placement sheet already holds every number it would need.
