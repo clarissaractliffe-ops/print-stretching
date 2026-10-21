@@ -28,18 +28,23 @@ Works in the browser on laptops (main use) and iPad. No install.
 
 - **Pin point:** the point the print grows from: centre, top centre (waist/neck), bottom centre (hem), left/right edge, or any point clicked on the pattern (snaps to the cut line). The pin lands on the same spot of the pattern in every size.
 - **Bleed:** print extends past the cut line by a set amount (default 10 mm).
+- **Where the artwork runs out:** when a bigger size goes past the edge of the artwork, the gap can be filled without enlarging the motifs:
+  - **Repeat the print:** tiles the artwork in every direction. With "Keep print size" this handles all-over repeats from a single repeat tile.
+  - **Mirror the print:** reflects the artwork at its edges, so there's no visible join.
+  - **Extend the edges:** stretches the outermost row of pixels outwards; for plain or gradient edges.
+  - **Fill with ground colour:** one colour under the artwork, picked automatically from the artwork's edge and changeable.
 
 **Check and adjust each size**
 - Size strip shows every size at the same scale, with its print scale, "Adjusted" and "Gap at edge" flags.
 - Per size: extra scale (%), move across/down (mm), or drag the print. Reset to automatic at any time. Changes on the base still flow through to the adjusted sizes.
-- **Gap at edge:** flags any size where the print doesn't reach the bleed line, with orange dots where.
+- **Gap at edge:** flags any size where the print doesn't reach the bleed line and nothing fills it, with orange dots where. Sizes where the artwork runs out but is filled are marked "Extended".
 - **Compare with base:** overlays the base outline, scaled evenly, to show where the pattern grows unevenly.
 
 **Out** (one ZIP)
-- **Illustrator (SVG):** one file per size, 1:1 in mm, layers `Print` (clipped to the bleed line), `Bleed_line`, `Cut_line`, `Pattern_markings`, `Info`. Vector artwork stays vector, except with Follow the shape, where the bent print is embedded as an image.
+- **Illustrator (SVG):** one file per size, 1:1 in mm, layers `Print` (clipped to the bleed line), `Bleed_line`, `Cut_line`, `Pattern_markings`, `Info`. Vector artwork stays vector, including repeated and mirrored copies (each copy is its own group), and a ground colour is its own `Ground` layer. Embedded as an image instead: the bent print in Follow the shape, extended edges (`Print_extended_edges` layer under the vector artwork), and repeats of raster artwork.
 - **Photoshop / printing (PNG):** one per size, cut to the bleed line, transparent outside, resolution stored (100–300 dpi) so it opens at real size.
 - **Placement sheet (CSV):** scale, position and hand adjustments for every size.
-- **Project file (JSON):** reopen and carry on later. Also autosaved on the device.
+- **Project file (JSON):** the tool's own save file, with the pattern, the artwork and every setting and hand adjustment inside it. Use it to carry on later or on another computer, hand a style to a colleague, or re-export after the print is revised without redoing the sizes. Illustrator and the printer don't need it. The browser also autosaves, but only one project per browser. The file contains the artwork, so it's as confidential as the print.
 
 ---
 
@@ -140,7 +145,8 @@ Same as Style Review: LOEWE logo embedded; Cormorant Garamond stands in for the 
     "name": "SKIRT FRONT", "baseSize": "36", "artId": "a1",
     "place": { "x": 0, "y": 294, "k": 1, "rot": 0 },
     "rule": { "mode": "uniform", "measure": "avg", "anchor": { "type": "centre", "pt": null } },
-    "adj": { "42": { "m": 1.01, "dx": 0, "dy": -4 } }
+    "adj": { "42": { "m": 1.01, "dx": 0, "dy": -4 } },
+    "extend": { "mode": "mirror", "color": null }
   }],
   "arts": { "a1": { "name": "print.svg", "kind": "svg", "src": "<svg…", "w": 700, "h": 660 } }
 }

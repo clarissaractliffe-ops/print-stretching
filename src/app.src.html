@@ -178,6 +178,8 @@ select, .input { width: 100%; border: 1px solid var(--line); background: var(--s
 .flag.base { background: var(--ink); color: var(--surface); }
 .flag.hand { background: var(--accent-soft); color: var(--accent); }
 .flag.gap { background: var(--warn-soft); color: var(--warn); }
+.flag.ext { background: var(--paper); color: var(--muted); border: 1px solid var(--line); }
+input[type="color"] { width: 44px; height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 2px; background: var(--surface); cursor: pointer; }
 
 /* ---------- right panel ---------- */
 .rules { display: grid; gap: 6px; }
@@ -327,6 +329,17 @@ const RULES = [
 ];
 const ANCHORS = [["centre", "Centre of piece"], ["top", "Top centre (waist / neck)"], ["bottom", "Bottom centre (hem)"], ["left", "Left edge"], ["right", "Right edge"], ["point", "A point I choose…"]];
 const MEASURES = [["avg", "Average"], ["width", "Width"], ["length", "Length"]];
+const EXTS = [["none", "Leave empty"], ["repeat", "Repeat the print"], ["mirror", "Mirror the print"], ["edge", "Extend the edges"], ["ground", "Fill with ground colour"]];
+const EXT_HINT = {
+  none: "Where the artwork doesn't reach the bleed line, the piece stays empty and the size is flagged.",
+  repeat: "The artwork tiles in every direction, motifs at the same size. Best for all-over repeats.",
+  mirror: "The artwork is reflected at its edges, so there's no visible join. Good for grounds and textures.",
+  edge: "The outermost row of the artwork is stretched outwards. Good when the edges are plain or a gradient.",
+  ground: "The piece is filled with one colour under the artwork, taken from the artwork's edge. Change it if needed."
+};
+const extOf = p => (p && p.extend) || { mode: "none", color: null };
+const extLabel = p => EXTS.find(e => e[0] === extOf(p).mode)[1];
+function groundColor(p) { const a = artOf(p); return extOf(p).color || (a && a.edgeColor) || "#ffffff"; }
 
 /* ================= state ================= */
 const S = { files: [], unitOverride: null, unitInfo: null, pieces: [], arts: {}, pi: 0, si: 0, bleed: 10, dpi: 150,
@@ -405,7 +418,7 @@ function scaleText(t, p) {
 /* ================= loading ================= */
 function newPiece(bp) {
   return { id: uid(), name: bp.name, sizes: bp.sizes, baseIdx: bp.baseIdx, sizesGuessed: bp.sizesGuessed, artId: null, place: null,
-    rule: { mode: "uniform", measure: "avg", anchor: { type: "centre", pt: null } }, adj: {}, sizeNames: null };
+    rule: { mode: "uniform", measure: "avg", anchor: { type: "centre", pt: null } }, adj: {}, sizeNames: null, extend: { mode: "none", color: null } };
 }
 function reparse(keep) {
   const old = keep || S.pieces;
@@ -419,7 +432,7 @@ function reparse(keep) {
     const o = old.find(q => q.name === bp.name);
     if (o && o.sizeNames && o.sizeNames.length === p.sizes.length) { p.sizeNames = o.sizeNames; p.sizes.forEach((s, k) => s.size = o.sizeNames[k]); }
     if (o) {
-      p.id = o.id; p.artId = o.artId; p.place = o.place; p.rule = o.rule; p.adj = o.adj || {};
+      p.id = o.id; p.artId = o.artId; p.place = o.place; p.rule = o.rule; p.adj = o.adj || {}; p.extend = o.extend || p.extend;
       const bi = p.sizes.findIndex(s => s.size === (o.baseSize || (o.sizes && o.sizes[o.baseIdx] && o.sizes[o.baseIdx].size)));
       if (bi >= 0) p.baseIdx = bi;
     }
@@ -500,6 +513,15 @@ async function prepareArt(art) {
   }
   art.pw = art.prev.width || art.prev.naturalWidth; art.ph = art.prev.height || art.prev.naturalHeight;
   try { art.thumb = (art.prev.toDataURL ? art.prev : rasterize(art.prev, art.pw, art.ph)); const t = rasterize(art.thumb, 160, 160 * art.ph / art.pw); art.thumbURL = t.toDataURL("image/png"); } catch (e) { art.thumbURL = ""; }
+  try { // most common colour along the artwork's border, for "Fill with ground colour"
+    const sm = rasterize(art.prev, 48, Math.max(1, Math.round(48 * art.ph / art.pw))), W = sm.width, H = sm.height;
+    const d = sm.getContext("2d").getImageData(0, 0, W, H).data, buckets = {};
+    const add = (x, y) => { const k = (y * W + x) * 4; if (d[k + 3] < 128) return; const key = (d[k] >> 4) + "," + (d[k + 1] >> 4) + "," + (d[k + 2] >> 4); const b = buckets[key] || (buckets[key] = { n: 0, r: 0, g: 0, b: 0 }); b.n++; b.r += d[k]; b.g += d[k + 1]; b.b += d[k + 2]; };
+    for (let x = 0; x < W; x++) { add(x, 0); add(x, H - 1); }
+    for (let y = 0; y < H; y++) { add(0, y); add(W - 1, y); }
+    const best = Object.values(buckets).sort((a, b) => b.n - a.n)[0];
+    art.edgeColor = best ? "#" + [best.r, best.g, best.b].map(v => Math.round(v / best.n).toString(16).padStart(2, "0")).join("") : null;
+  } catch (e) { art.edgeColor = null; }
   art.ready = true;
   return art;
 }
@@ -581,10 +603,10 @@ function glInit() {
     const sh = (type, src) => { const x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
     const prog = gl.createProgram();
     gl.attachShader(prog, sh(gl.VERTEX_SHADER, "attribute vec2 p;attribute vec2 uv;uniform vec4 r;varying vec2 v;void main(){v=uv;vec2 q=(p-r.xy)/r.zw;gl_Position=vec4(q.x*2.0-1.0,1.0-q.y*2.0,0.0,1.0);}"));
-    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, "precision mediump float;varying vec2 v;uniform sampler2D t;void main(){gl_FragColor=texture2D(t,v);}"));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\nvarying vec2 v;uniform sampler2D t;uniform float m;void main(){vec2 u=v;if(m<0.5){if(u.x<0.0||u.x>1.0||u.y<0.0||u.y>1.0)discard;}else if(m<1.5){u=fract(u);}else if(m<2.5){u=1.0-abs(mod(u,2.0)-1.0);}else{u=clamp(u,0.0,1.0);}gl_FragColor=texture2D(t,u);}"));
     gl.linkProgram(prog); if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("link");
     gl.useProgram(prog);
-    GLW.loc = { p: gl.getAttribLocation(prog, "p"), uv: gl.getAttribLocation(prog, "uv"), r: gl.getUniformLocation(prog, "r") };
+    GLW.loc = { p: gl.getAttribLocation(prog, "p"), uv: gl.getAttribLocation(prog, "uv"), r: gl.getUniformLocation(prog, "r"), m: gl.getUniformLocation(prog, "m") };
     GLW.buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, GLW.buf);
     gl.enableVertexAttribArray(GLW.loc.p); gl.vertexAttribPointer(GLW.loc.p, 2, gl.FLOAT, false, 16, 0);
     gl.enableVertexAttribArray(GLW.loc.uv); gl.vertexAttribPointer(GLW.loc.uv, 2, gl.FLOAT, false, 16, 8);
@@ -599,7 +621,9 @@ function glInit() {
   } catch (e) { GLW.failed = true; console.warn("WebGL unavailable, using canvas triangles", e); }
   return GLW.gl;
 }
-function warpGL(c, src, art, fn, N) {
+const WRAP = { none: 0, ground: 0, repeat: 1, mirror: 2, edge: 3 };
+function warpGL(c, src, art, fn, N, Rg, ext) {
+  Rg = Rg || [0, 0, art.w, art.h];
   const gl = glInit(); if (!gl || !c.getTransform) return false;
   const T = c.getTransform(); if (Math.abs(T.b) > 1e-9 || Math.abs(T.c) > 1e-9 || T.a <= 0 || T.d <= 0) return false;
   if (GLW.texSrc !== src) {
@@ -610,8 +634,9 @@ function warpGL(c, src, art, fn, N) {
     GLW.texSrc = src;
   }
   const pts = []; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const gx = u => Rg[0] + (Rg[2] - Rg[0]) * u / N, gy = v => Rg[1] + (Rg[3] - Rg[1]) * v / N;
   for (let v = 0; v <= N; v++) for (let u = 0; u <= N; u++) {
-    const q = fn([art.w * u / N, art.h * v / N]); pts.push(q);
+    const q = fn([gx(u), gy(v)]); pts.push(q);
     if (q[0] < x0) x0 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[0] > x1) x1 = q[0]; if (q[1] > y1) y1 = q[1];
   }
   const cw = c.canvas.width, ch = c.canvas.height;
@@ -619,12 +644,13 @@ function warpGL(c, src, art, fn, N) {
   const dx1 = Math.min(cw, Math.ceil(x1 * T.a + T.e)), dy1 = Math.min(ch, Math.ceil(y1 * T.d + T.f));
   if (dx1 <= dx0 || dy1 <= dy0) return true;
   const data = new Float32Array(N * N * 6 * 4); let o = 0;
-  const put = (i, u, v) => { data[o++] = pts[i][0]; data[o++] = pts[i][1]; data[o++] = u / N; data[o++] = v / N; };
+  const put = (i, u, v) => { data[o++] = pts[i][0]; data[o++] = pts[i][1]; data[o++] = gx(u) / art.w; data[o++] = gy(v) / art.h; };
   for (let v = 0; v < N; v++) for (let u = 0; u < N; u++) {
     const i0 = v * (N + 1) + u, i1 = i0 + 1, i2 = i0 + N + 1, i3 = i2 + 1;
     put(i0, u, v); put(i1, u + 1, v); put(i3, u + 1, v + 1); put(i0, u, v); put(i3, u + 1, v + 1); put(i2, u, v + 1);
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, GLW.buf); gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+  gl.uniform1f(GLW.loc.m, WRAP[ext || "none"] || 0);
   const ts = GLW.tile;
   for (let ty = dy0; ty < dy1; ty += ts) for (let tx = dx0; tx < dx1; tx += ts) {
     const tw = Math.min(ts, dx1 - tx), th = Math.min(ts, dy1 - ty);
@@ -637,8 +663,8 @@ function warpGL(c, src, art, fn, N) {
   }
   return true;
 }
-function drawWarp(c, src, art, fn, pxPerMM, N) {
-  if (warpGL(c, src, art, fn, Math.max(N, 24))) return;
+function drawWarp(c, src, art, fn, pxPerMM, N, Rg, ext) {
+  if (warpGL(c, src, art, fn, Math.max(N, 24), Rg, ext)) return;
   N = Math.min(N, 40);
   const sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight, P2 = [];
   for (let v = 0; v <= N; v++) for (let u = 0; u <= N; u++) P2.push(fn([art.w * u / N, art.h * v / N]));
@@ -650,9 +676,58 @@ function drawWarp(c, src, art, fn, pxPerMM, N) {
     tri(c, src, [s0, s3, s2], [P2[i0], P2[i3], P2[i2]], ex);
   }
 }
-function drawArt(c, p, art, t, o) {
-  if (t.kind === "affine") { c.save(); c.transform(...t.m); c.drawImage(o.thumb ? art.prev : art.img, 0, 0, art.w, art.h); c.restore(); }
-  else drawWarp(c, art.prev, art, t.fn, o.scale, o.mesh || 20);
+/* ---- extending the artwork where it runs out ---- */
+// the part of artwork space (mm, artwork frame) needed to cover this size's bleed area
+function artRegion(p, i, t, art) {
+  const ext = extOf(p).mode;
+  if (ext === "none" || ext === "ground") return [0, 0, art.w, art.h];
+  const b = E.bbox(bleedOf(p, i));
+  let inv;
+  if (t.kind === "affine") inv = Mx.inv(t.m);
+  else { const f = t.fn, o = f([0, 0]), ax = f([art.w, 0]), ay = f([0, art.h]); inv = Mx.inv([(ax[0] - o[0]) / art.w, (ax[1] - o[1]) / art.w, (ay[0] - o[0]) / art.h, (ay[1] - o[1]) / art.h, o[0], o[1]]); }
+  let X0 = 0, Y0 = 0, X1 = art.w, Y1 = art.h;
+  for (const q of [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]]) {
+    const r = Mx.apply(inv, q); X0 = Math.min(X0, r[0]); Y0 = Math.min(Y0, r[1]); X1 = Math.max(X1, r[0]); Y1 = Math.max(Y1, r[1]);
+  }
+  const pad = (t.kind === "affine" ? 0.03 : 0.12) * Math.max(art.w, art.h), lim = 40;
+  return [Math.max(X0 - pad, -lim * art.w), Math.max(Y0 - pad, -lim * art.h), Math.min(X1 + pad, (lim + 1) * art.w), Math.min(Y1 + pad, (lim + 1) * art.h)];
+}
+const MIRROR = new WeakMap();
+function mirrored(src) { // 2 × 2 tile: original, flipped across, flipped down, flipped both
+  if (MIRROR.has(src)) return MIRROR.get(src);
+  const sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight, k = Math.min(1, 8192 / (2 * Math.max(sw, sh)));
+  const w = Math.max(1, Math.round(sw * k)), h = Math.max(1, Math.round(sh * k));
+  const cv = document.createElement("canvas"); cv.width = 2 * w; cv.height = 2 * h; const x = cv.getContext("2d");
+  [[0, 0, 1, 1], [2 * w, 0, -1, 1], [0, 2 * h, 1, -1], [2 * w, 2 * h, -1, -1]].forEach(([tx, ty, a, d]) => { x.setTransform(a, 0, 0, d, tx, ty); x.drawImage(src, 0, 0, w, h); });
+  MIRROR.set(src, cv); return cv;
+}
+function drawEdges(c, src, art, Rg) { // stretch the outermost pixel row/column outwards
+  const sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight, [X0, Y0, X1, Y1] = Rg, w = art.w, h = art.h, ov = Math.min(w, h) * 0.003;
+  if (X0 < 0) c.drawImage(src, 0, 0, 1, sh, X0, 0, -X0 + ov, h);
+  if (X1 > w) c.drawImage(src, sw - 1, 0, 1, sh, w - ov, 0, X1 - w + ov, h);
+  if (Y0 < 0) c.drawImage(src, 0, 0, sw, 1, 0, Y0, w, -Y0 + ov);
+  if (Y1 > h) c.drawImage(src, 0, sh - 1, sw, 1, 0, h - ov, w, Y1 - h + ov);
+  if (X0 < 0 && Y0 < 0) c.drawImage(src, 0, 0, 1, 1, X0, Y0, -X0 + ov, -Y0 + ov);
+  if (X1 > w && Y0 < 0) c.drawImage(src, sw - 1, 0, 1, 1, w - ov, Y0, X1 - w + ov, -Y0 + ov);
+  if (X0 < 0 && Y1 > h) c.drawImage(src, 0, sh - 1, 1, 1, X0, h - ov, -X0 + ov, Y1 - h + ov);
+  if (X1 > w && Y1 > h) c.drawImage(src, sw - 1, sh - 1, 1, 1, w - ov, h - ov, X1 - w + ov, Y1 - h + ov);
+}
+/* Draws the print for size i, extended as the piece is set up. o: { img (crisp source), prev (canvas source), scale (px per mm), mesh, thumb } */
+function paintPrint(c, p, art, t, i, o) {
+  const ext = extOf(p).mode, Rg = artRegion(p, i, t, art), img = o.img || art.img, prev = o.prev || art.prev;
+  if (t.kind === "affine") {
+    c.save(); c.transform(...t.m);
+    if (ext === "repeat" || ext === "mirror") {
+      const tile = ext === "mirror" ? mirrored(prev) : prev, k = ext === "mirror" ? 2 : 1;
+      const sw = tile.width || tile.naturalWidth, sh = tile.height || tile.naturalHeight, pat = c.createPattern(tile, "repeat");
+      pat.setTransform(new DOMMatrix([k * art.w / sw, 0, 0, k * art.h / sh, 0, 0]));
+      c.fillStyle = pat; c.fillRect(Rg[0], Rg[1], Rg[2] - Rg[0], Rg[3] - Rg[1]);
+    } else {
+      if (ext === "edge") drawEdges(c, prev, art, Rg);
+      c.drawImage(o.thumb ? prev : img, 0, 0, art.w, art.h);
+    }
+    c.restore();
+  } else drawWarp(c, prev, art, t.fn, o.scale, o.mesh || 20, Rg, ext);
 }
 function drawGrain(c, g, px) {
   const [a, b] = g, ang = Math.atan2(b[1] - a[1], b[0] - a[0]), h = 7 * px;
@@ -664,8 +739,10 @@ function drawSize(c, p, i, o) {
   path(c, bl); c.fillStyle = COL.piece; c.fill();
   if (art) {
     const t = o.t || tf(p, i);
-    if (o.outside) { c.save(); c.globalAlpha = .2; drawArt(c, p, art, t, o); c.restore(); }
-    c.save(); path(c, bl); c.clip(); drawArt(c, p, art, t, o); c.restore();
+    if (o.outside) { c.save(); c.globalAlpha = .2; paintPrint(c, p, art, t, i, o); c.restore(); }
+    c.save(); path(c, bl); c.clip();
+    if (extOf(p).mode === "ground") { c.fillStyle = groundColor(p); c.fill(); }
+    paintPrint(c, p, art, t, i, o); c.restore();
   }
   if (S.bleed > 0) { c.setLineDash([4 * px, 3 * px]); c.strokeStyle = COL.bleed; c.lineWidth = 1.1 * px; path(c, bl); c.stroke(); c.setLineDash([]); }
   c.strokeStyle = COL.cut; c.lineWidth = (o.detail ? 1.7 : 1.2) * px; path(c, sz.outline); c.stroke();
@@ -716,7 +793,7 @@ function drawStage() {
   // gaps where the print doesn't reach the bleed line
   if (art) {
     const cov = coverage(p, S.si);
-    if (cov && !cov.ok) { c.fillStyle = COL.warn; for (const q of cov.miss) { c.beginPath(); c.arc(q[0], q[1], 3.2 * px, 0, Math.PI * 2); c.fill(); } }
+    if (cov && !cov.ok && extOf(p).mode === "none") { c.fillStyle = COL.warn; for (const q of cov.miss) { c.beginPath(); c.arc(q[0], q[1], 3.2 * px, 0, Math.PI * 2); c.fill(); } }
     // pin point
     const A = t.A; c.strokeStyle = COL.accent; c.lineWidth = 1.6 * px;
     c.beginPath(); c.arc(A[0], A[1], 7 * px, 0, Math.PI * 2); c.stroke();
@@ -740,7 +817,7 @@ function renderStrip() {
     const t = art ? tf(p, i) : null, g = growth(p, i);
     btn.querySelector(".sz-pct").textContent = t ? (i === p.baseIdx ? "100 %" : scaleText(t, p)) : (i === p.baseIdx ? "" : (g.dw >= 0 ? "+" : "−") + Math.abs(g.dw).toFixed(0) + " mm");
     const cov = art ? coverage(p, i) : null;
-    btn.querySelector(".sz-flags").innerHTML = (i === p.baseIdx ? `<span class="flag base">Base</span>` : "") + (isAdjusted(p, p.sizes[i].size) ? `<span class="flag hand">Adjusted</span>` : "") + (cov && !cov.ok ? `<span class="flag gap">Gap at edge</span>` : "");
+    btn.querySelector(".sz-flags").innerHTML = (i === p.baseIdx ? `<span class="flag base">Base</span>` : "") + (isAdjusted(p, p.sizes[i].size) ? `<span class="flag hand">Adjusted</span>` : "") + (cov && !cov.ok ? (extOf(p).mode === "none" ? `<span class="flag gap">Gap at edge</span>` : `<span class="flag ext">Extended</span>`) : "");
     const cv = btn.querySelector("canvas"), c = cv.getContext("2d");
     c.setTransform(1, 0, 0, 1, 0, 0); c.fillStyle = COL.mat; c.fillRect(0, 0, cv.width, cv.height);
     // all thumbnails share one scale so growth between sizes is visible
@@ -819,6 +896,10 @@ function renderRight() {
     h += `<div class="field"><label for="anchor">Pin point</label><select id="anchor" data-a="anchor">${ANCHORS.map(([v, l]) => `<option value="${v}" ${r.anchor.type === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
     h += `<p class="hint">${r.anchor.type === "point" ? (r.anchor.pt ? `This point stays on the same spot of the pattern in every size. <button class="linkbtn" data-a="pick">Choose again</button>` : `<button class="linkbtn" data-a="pick">Click it on the pattern</button>`) : "The print grows out from this point, so it stays put in every size."}</p></div>`;
   }
+  const ex = extOf(p);
+  h += `<hr class="hr"><div class="field"><label for="ext">Where the artwork runs out</label><select id="ext" data-a="ext">${EXTS.map(([v, l]) => `<option value="${v}" ${ex.mode === v ? "selected" : ""}>${l}</option>`).join("")}</select><p class="hint">${EXT_HINT[ex.mode]}</p>`;
+  if (ex.mode === "ground") h += `<div class="row"><input type="color" id="extcolor" data-a="extcolor" value="${groundColor(p)}" aria-label="Ground colour"><span class="mono">${groundColor(p).toUpperCase()}</span>${art && art.edgeColor && ex.color && ex.color.toLowerCase() !== art.edgeColor.toLowerCase() ? `<button class="linkbtn" data-a="extauto">Use the artwork's edge colour</button>` : ""}</div>`;
+  h += `</div>`;
   h += `<div class="grid2"><div class="field"><label for="base">Base size</label><select id="base" data-a="base">${p.sizes.map((s, i) => `<option value="${i}" ${i === p.baseIdx ? "selected" : ""}>${esc(s.size)}</option>`).join("")}</select></div>`;
   h += stepper("bleed", S.bleed, "mm", 1, "Bleed") + `</div></div></div>`;
 
@@ -836,7 +917,7 @@ function renderRight() {
     const t = tf(p, S.si), g = growth(p, S.si), adj = p.adj[sz.size] || { m: 1, dx: 0, dy: 0 }, cov = coverage(p, S.si);
     h += `<div class="size-head"><div class="big-pct${Math.abs(t.sx - t.sy) < 1e-4 ? "" : " two"}">${Math.abs(t.sx - t.sy) < 1e-4 ? (t.sx * 100).toFixed(1) + "<small> %</small>" : (t.sx * 100).toFixed(1) + "<small> × </small>" + (t.sy * 100).toFixed(1) + "<small> %</small>"}</div><span class="hint">print scale vs ${esc(p.sizes[p.baseIdx].size)}</span></div>`;
     h += `<dl class="readout" style="margin:12px 0"><dt>Piece width</dt><dd>${f0(g.w)} mm (${sign(g.dw)}, ${((g.rw - 1) * 100).toFixed(1)} %)</dd><dt>Piece length</dt><dd>${f0(g.h)} mm (${sign(g.dh)}, ${((g.rh - 1) * 100).toFixed(1)} %)</dd></dl>`;
-    if (cov && !cov.ok) h += `<div class="note" style="margin:0 0 12px">The print doesn't reach the bleed line everywhere on this size (orange dots). Make it bigger on the base size or scale it up here.</div>`;
+    if (cov && !cov.ok) h += extOf(p).mode === "none" ? `<div class="note" style="margin:0 0 12px">The artwork doesn't reach the bleed line everywhere on this size (orange dots). Choose how to fill it under <b>Where the artwork runs out</b>, or scale it up here.</div>` : `<p class="hint" style="margin:0 0 12px">The artwork runs out on this size; the gap is filled by <b>${esc(extLabel(p).toLowerCase())}</b>.</p>`;
     h += `<hr class="hr"><div class="stack" style="margin-top:12px"><div class="status-line"><b>Fine-tune by hand</b>${isAdjusted(p, sz.size) ? `<span class="flag hand">Adjusted</span>` : ""}</div>`;
     h += `${stepper("am", f1(adj.m * 100), "%", 0.5, "Extra scale")}`;
     h += `<div class="grid2">${stepper("ax", f1(adj.dx), "mm", 1, "Move across")}${stepper("ay", f1(adj.dy), "mm", 1, "Move down")}</div>`;
@@ -890,6 +971,7 @@ document.addEventListener("click", ev => {
   else if (a === "rm-art") { const id = p.artId; p.artId = null; p.adj = {}; if (!S.pieces.some(q => q.artId === id)) delete S.arts[id]; save(); renderAll(); }
   else if (a === "mode") { p.rule.mode = b.dataset.v; update(); }
   else if (a === "measure") { p.rule.measure = b.dataset.v; update(); }
+  else if (a === "extauto") { p.extend.color = null; update(); }
   else if (a === "pick") { S.picking = true; S.si = p.baseIdx; renderAll(); stage.focus(); }
   else if (a === "centre" || a === "fill" || a === "real") {
     const art = artOf(p), bb = E.bbox(p.sizes[p.baseIdx].outline);
@@ -903,6 +985,8 @@ document.addEventListener("change", ev => {
   const el = ev.target, a = el.dataset && el.dataset.a, p = P();
   if (!a) return;
   if (a === "num") setNum(el.id, parseFloat(el.value));
+  else if (a === "ext") { p.extend = { mode: el.value, color: extOf(p).color }; update(); }
+  else if (a === "extcolor") { p.extend = { mode: "ground", color: el.value }; update(); }
   else if (a === "unit") { S.unitOverride = el.value; reparse(); S.zoom = 1; S.pan = [0, 0]; save(); renderAll(); }
   else if (a === "anchor") { p.rule.anchor = { type: el.value, pt: el.value === "point" ? p.rule.anchor.pt : null }; if (el.value === "point" && !p.rule.anchor.pt) { S.picking = true; S.si = p.baseIdx; renderAll(); } else update(); }
   else if (a === "base") {
@@ -1037,7 +1121,7 @@ function projectData(withArt = true) {
   return {
     app: "loewe-print-grading", version: 1, saved: new Date().toISOString(), unitOverride: S.unitOverride, bleed: S.bleed, dpi: S.dpi, example: S.example,
     files: S.files,
-    pieces: S.pieces.map(p => ({ name: p.name, baseSize: p.sizes[p.baseIdx].size, artId: p.artId, place: p.place, rule: p.rule, adj: p.adj, sizeNames: p.sizeNames })),
+    pieces: S.pieces.map(p => ({ name: p.name, baseSize: p.sizes[p.baseIdx].size, artId: p.artId, place: p.place, rule: p.rule, adj: p.adj, sizeNames: p.sizeNames, extend: p.extend })),
     arts: Object.fromEntries(Object.values(S.arts).filter(a => withArt).map(a => [a.id, { id: a.id, name: a.name, kind: a.kind, src: a.src, w: a.w, h: a.h, dpi: a.dpi || null, known: !!a.known }]))
   };
 }
@@ -1099,14 +1183,26 @@ async function renderPNG(p, i, dpi) {
   const cv = document.createElement("canvas"); cv.width = W; cv.height = H; const c = cv.getContext("2d");
   c.setTransform(ppm, 0, 0, ppm, -b.x * ppm, -b.y * ppm);
   path(c, bl); c.clip();
+  const ext = extOf(p).mode;
+  if (ext === "ground") { c.fillStyle = groundColor(p); c.fill(); }
   const scale = Math.max(t.sx, t.sy) * p.place.k;
   const src = await artSourceFor(art, ppm * scale * 1.05);
-  if (t.kind === "affine") { c.transform(...t.m); c.drawImage(src, 0, 0, art.w, art.h); }
-  else { const rs = art.kind === "svg" ? rasterize(src, src.naturalWidth, src.naturalHeight) : src; drawWarp(c, rs, art, t.fn, ppm, 96); }
+  const needCanvas = t.kind !== "affine" || ext === "repeat" || ext === "mirror" || ext === "edge";
+  const prev = needCanvas && art.kind === "svg" ? rasterize(src, src.naturalWidth, src.naturalHeight) : src;
+  paintPrint(c, p, art, t, i, { img: src, prev, scale: ppm, mesh: 96 });
   const blob = await new Promise((res, rej) => cv.toBlob(bb => bb ? res(bb) : rej(new Error("PNG could not be created")), "image/png"));
   const u8 = E.pngSetDPI(new Uint8Array(await blob.arrayBuffer()), ppm * 25.4);
   cv.width = cv.height = 1;
   return { u8, dpi: Math.round(ppm * 25.4), x: b.x, y: b.y, w: b.w, h: b.h };
+}
+function suffixIds(inner, suf) { // unique ids for each copy of the artwork
+  const ids = [...new Set([...inner.matchAll(/\sid="([^"]+)"/g)].map(m => m[1]))];
+  let out = inner;
+  for (const id of ids) {
+    const e = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`(\\sid=")${e}(")`, "g"), `$1${id}_${suf}$2`).replace(new RegExp(`url\\(#${e}\\)`, "g"), `url(#${id}_${suf})`).replace(new RegExp(`(href=")#${e}(")`, "g"), `$1#${id}_${suf}$2`);
+  }
+  return out;
 }
 async function buildSVG(p, i) {
   const sz = p.sizes[i], art = artOf(p), t = tf(p, i), bl = bleedOf(p, i), b = E.bbox(bl);
@@ -1114,16 +1210,32 @@ async function buildSVG(p, i) {
   let s = `<?xml version="1.0" encoding="UTF-8"?>\n<!-- LOEWE Print Grading · ${esc(p.name)} · size ${esc(sz.size)} · 1:1, units mm -->\n`;
   s += `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${fx(vw)}mm" height="${fx(vh)}mm" viewBox="${fx(vx)} ${fx(vy)} ${fx(vw)} ${fx(vh)}">\n`;
   s += `<title>${esc(p.name)} – size ${esc(sz.size)}</title>\n<defs><clipPath id="pg_bleed_clip"><path d="${svgD(bl)}"/></clipPath></defs>\n`;
+  const ext = extOf(p).mode;
+  if (art && ext === "ground") s += `<g id="Ground"><path d="${svgD(bl)}" fill="${groundColor(p)}"/></g>\n`;
   s += `<g id="Print" clip-path="url(#pg_bleed_clip)">\n`;
   if (art) {
-    if (t.kind === "affine") {
-      const mt = t.m.map(fx).join(" ");
-      if (art.kind === "svg") s += `<g transform="matrix(${mt})"><g transform="scale(${fx(art.w / art.vb[2])} ${fx(art.h / art.vb[3])}) translate(${fx(-art.vb[0])} ${fx(-art.vb[1])})">${art.inner}</g></g>\n`;
-      else s += `<image width="${fx(art.w)}" height="${fx(art.h)}" preserveAspectRatio="none" transform="matrix(${mt})" xlink:href="${art.src}"/>\n`;
-    } else {
-      const r = await renderPNG(p, i, Math.min(S.dpi, 200));
-      s += `<image x="${fx(r.x)}" y="${fx(r.y)}" width="${fx(r.w)}" height="${fx(r.h)}" preserveAspectRatio="none" xlink:href="data:image/png;base64,${u8ToB64(r.u8)}"/>\n`;
-    }
+    const rasterImage = async id => { const r = await renderPNG(p, i, Math.min(S.dpi, 200)); return `<image${id ? ` id="${id}"` : ""} x="${fx(r.x)}" y="${fx(r.y)}" width="${fx(r.w)}" height="${fx(r.h)}" preserveAspectRatio="none" xlink:href="data:image/png;base64,${u8ToB64(r.u8)}"/>\n`; };
+    const vec = (inner) => `<g transform="scale(${fx(art.w / art.vb[2])} ${fx(art.h / art.vb[3])}) translate(${fx(-art.vb[0])} ${fx(-art.vb[1])})">${inner}</g>`;
+    const mt = t.kind === "affine" ? t.m.map(fx).join(" ") : "";
+    if (t.kind === "affine" && art.kind === "svg" && (ext === "repeat" || ext === "mirror")) {
+      // vector copies of the artwork, so it stays editable in Illustrator
+      const Rg = artRegion(p, i, t, art), tiles = [];
+      for (let ty = Math.floor(Rg[1] / art.h); ty < Math.ceil(Rg[3] / art.h); ty++) for (let tx = Math.floor(Rg[0] / art.w); tx < Math.ceil(Rg[2] / art.w); tx++) tiles.push([tx, ty]);
+      if (tiles.length <= 300) {
+        s += `<g id="Print_${ext === "repeat" ? "repeated" : "mirrored"}" transform="matrix(${mt})">`;
+        for (const [tx, ty] of tiles) {
+          const fxX = ext === "mirror" && (tx & 1), fxY = ext === "mirror" && (ty & 1);
+          const ox = (fxX ? tx + 1 : tx) * art.w, oy = (fxY ? ty + 1 : ty) * art.h;
+          s += `<g transform="translate(${fx(ox)} ${fx(oy)}) scale(${fxX ? -1 : 1} ${fxY ? -1 : 1})">${vec(tx || ty ? suffixIds(art.inner, `t${tx + 50}_${ty + 50}`) : art.inner)}</g>`;
+        }
+        s += `</g>\n`;
+      } else s += await rasterImage("Print_image");
+    } else if (t.kind === "affine" && art.kind === "svg") {
+      if (ext === "edge") s += `<g id="Print_extended_edges">${await rasterImage()}</g>\n`;
+      s += `<g transform="matrix(${mt})">${vec(art.inner)}</g>\n`;
+    } else if (t.kind === "affine" && ext === "none" || t.kind === "affine" && ext === "ground") {
+      s += `<image width="${fx(art.w)}" height="${fx(art.h)}" preserveAspectRatio="none" transform="matrix(${mt})" xlink:href="${art.src}"/>\n`;
+    } else s += await rasterImage();
   }
   s += `</g>\n`;
   if (S.bleed > 0) s += `<g id="Bleed_line" fill="none" stroke="#E4007C" stroke-width="0.3" stroke-dasharray="3 2"><path d="${svgD(bl)}"/></g>\n`;
@@ -1134,16 +1246,16 @@ async function buildSVG(p, i) {
     if (sz.grain) { const [a, c2] = sz.grain, an = Math.atan2(c2[1] - a[1], c2[0] - a[0]), hh = 6; const arrow = (q, ang) => `M${fx(q[0] - hh * Math.cos(ang - .45))} ${fx(q[1] - hh * Math.sin(ang - .45))} L${fx(q[0])} ${fx(q[1])} L${fx(q[0] - hh * Math.cos(ang + .45))} ${fx(q[1] - hh * Math.sin(ang + .45))}`; s += `<path id="Grain_line" d="M${fx(a[0])} ${fx(a[1])} L${fx(c2[0])} ${fx(c2[1])} ${arrow(c2, an)} ${arrow(a, an + Math.PI)}"/>`; }
     s += `</g>\n`;
   }
-  const info = `${p.name} · size ${sz.size} · base ${p.sizes[p.baseIdx].size} · ${ruleLabel(p)} · print ${art ? scaleText(t, p) : "–"}${isAdjusted(p, sz.size) ? " · adjusted by hand" : ""}`;
+  const info = `${p.name} · size ${sz.size} · base ${p.sizes[p.baseIdx].size} · ${ruleLabel(p)} · print ${art ? scaleText(t, p) : "–"}${isAdjusted(p, sz.size) ? " · adjusted by hand" : ""}${extOf(p).mode !== "none" ? " · beyond the artwork: " + extLabel(p).toLowerCase() : ""}`;
   s += `<g id="Info"><text x="${fx(b.x)}" y="${fx(b.y + b.h + m + 4)}" font-family="Arial, Helvetica, sans-serif" font-size="5" fill="#000000">${esc(info)}</text></g>\n</svg>\n`;
   return s;
 }
 function buildCSV(items) {
-  const rows = [["Piece", "Size", "Base size", "Rule", "Pin point", "Piece width (mm)", "Piece length (mm)", "Width vs base (%)", "Length vs base (%)", "Print scale across (%)", "Print scale down (%)", "Extra scale by hand (%)", "Moved across by hand (mm)", "Moved down by hand (mm)", "Print centre from piece centre, across (mm)", "Print centre from piece centre, down (mm)", "Print reaches bleed line", "Artwork"]];
+  const rows = [["Piece", "Size", "Base size", "Rule", "Pin point", "Piece width (mm)", "Piece length (mm)", "Width vs base (%)", "Length vs base (%)", "Print scale across (%)", "Print scale down (%)", "Extra scale by hand (%)", "Moved across by hand (mm)", "Moved down by hand (mm)", "Print centre from piece centre, across (mm)", "Print centre from piece centre, down (mm)", "Artwork reaches bleed line", "Where the artwork runs out", "Artwork"]];
   for (const { p, i } of items) {
     const sz = p.sizes[i], g = growth(p, i), t = tf(p, i), art = artOf(p), adj = p.adj[sz.size] || { m: 1, dx: 0, dy: 0 }, b = E.bbox(sz.outline);
     const c = mapFn(t)([art.w / 2, art.h / 2]), cov = coverage(p, i);
-    rows.push([p.name, sz.size, p.sizes[p.baseIdx].size, ruleLabel(p), anchorLabel(p), f1(g.w), f1(g.h), f1(g.rw * 100), f1(g.rh * 100), f1(t.sx * 100), f1(t.sy * 100), f1(adj.m * 100), f1(adj.dx), f1(adj.dy), f1(c[0] - b.cx), f1(c[1] - b.cy), cov && cov.ok ? "yes" : "no", art.name]);
+    rows.push([p.name, sz.size, p.sizes[p.baseIdx].size, ruleLabel(p), anchorLabel(p), f1(g.w), f1(g.h), f1(g.rw * 100), f1(g.rh * 100), f1(t.sx * 100), f1(t.sy * 100), f1(adj.m * 100), f1(adj.dx), f1(adj.dy), f1(c[0] - b.cx), f1(c[1] - b.cy), cov && cov.ok ? "yes" : "no", extLabel(p), art.name]);
   }
   return "﻿" + rows.map(r => r.map(v => /[",;\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v).join(",")).join("\r\n");
 }
@@ -1164,7 +1276,7 @@ function exportItems() {
 }
 function renderExport() {
   const withArt = S.pieces.filter(p => artOf(p)), allSizes = E.sortSizes([...new Set(withArt.flatMap(p => p.sizes.map(s => s.size)))]);
-  const gaps = exportItems().filter(({ p, i }) => { const c = coverage(p, i); return c && !c.ok; });
+  const gaps = exportItems().filter(({ p, i }) => { const c = coverage(p, i); return c && !c.ok && extOf(p).mode === "none"; });
   let h = `<div class="field"><span class="lbl">Pieces</span><div class="chips">${withArt.map(p => `<button class="chip" data-x="piece" data-v="${p.id}" aria-pressed="${EXP.pieces.includes(p.id)}">${esc(p.name)}</button>`).join("")}</div></div>`;
   h += `<div class="field"><span class="lbl">Sizes</span><div class="chips">${allSizes.map(s => `<button class="chip" data-x="size" data-v="${esc(s)}" aria-pressed="${!EXP.sizes || EXP.sizes.includes(s)}">${esc(s)}</button>`).join("")}</div></div>`;
   h += `<label class="opt"><input type="checkbox" id="x-svg" ${EXP.svg ? "checked" : ""}><b>Illustrator files (SVG)</b><span>One per size at 1:1 in mm, with layers for the print, cut line, bleed line and pattern markings. Vector artwork stays vector${withArt.some(p => p.rule.mode === "warp") ? ", except with Follow the shape, where the bent print is embedded as an image" : ""}.</span></label>`;

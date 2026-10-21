@@ -172,6 +172,8 @@ select, .input { width: 100%; border: 1px solid var(--line); background: var(--s
 .flag.base { background: var(--ink); color: var(--surface); }
 .flag.hand { background: var(--accent-soft); color: var(--accent); }
 .flag.gap { background: var(--warn-soft); color: var(--warn); }
+.flag.ext { background: var(--paper); color: var(--muted); border: 1px solid var(--line); }
+input[type="color"] { width: 44px; height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 2px; background: var(--surface); cursor: pointer; }
 
 /* ---------- right panel ---------- */
 .rules { display: grid; gap: 6px; }
